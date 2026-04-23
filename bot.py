@@ -31,11 +31,15 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 ADMIN_ID = 801691108711202856  
 
 app = Flask('')
+
 @app.route('/')
-def home(): return "Binod v9.6.3 is Active"
+def home():
+    return "Binod v9.7.1 is Active on Render"
 
 def run_ping_server():
-    app.run(host='0.0.0.0', port=7860)
+    # Render requires binding to the 'PORT' environment variable
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
 client_db = MongoClient(MONGO_URI, tls=True, tlsAllowInvalidCertificates=True)
 db = client_db["binod_bot"]
@@ -48,7 +52,7 @@ class BinodOP(discord.Client):
         self.key_index = 0 
 
     async def on_ready(self):
-        print(f'🚀 Binod v9.6.3 Online.')
+        print(f'🚀 Binod v9.7.1 Online.')
 
     async def on_message(self, message):
         if message.author.bot or message.channel.id != 1493285325865222186:
@@ -108,57 +112,54 @@ class BinodOP(discord.Client):
         payload = []
         for h in history:
             role = 'user' if h.get('role') == 'user' else 'model'
-            if role == 'user':
-                prefix = f"{h.get('author_name', 'Unknown')} ({h.get('author_id', '0')}): "
-            else:
-                prefix = "Binod: "
+            prefix = f"{h.get('author_name', 'Unknown')} ({h.get('author_id', '0')}): " if role == 'user' else "Binod: "
             payload.append(types.Content(role=role, parts=[types.Part(text=f"{prefix}{h['content']}")] ))
 
         current_label = f"{message.author.display_name} ({message.author.id})"
         payload.append(types.Content(role='user', parts=[types.Part(text=f"{current_label}: {message.content}")] ))
-
-        models_to_try = ['gemini-3.1-flash-lite-preview', 'gemini-3-flash-preview']
 
         for attempt in range(len(API_KEYS)):
             current_key = API_KEYS[self.key_index]
             self.key_index = (self.key_index + 1) % len(API_KEYS)
             client = genai.Client(api_key=current_key)
             
-            for model_name in models_to_try:
-                try:
-                    res = await asyncio.get_event_loop().run_in_executor(None, lambda: client.models.generate_content(
-                        model=model_name, 
-                        contents=payload, 
-                        config=types.GenerateContentConfig(
-                            system_instruction=system_instr,
-                            safety_settings=[
-                                types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
-                                types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
-                                types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
-                                types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
-                            ]
-                        )
-                    ))
-                    
-                    if res.text:
-                        reply = res.text.strip()
-                        history.append({
-                            "role": "user", 
-                            "content": message.content,
-                            "author_name": message.author.display_name,
-                            "author_id": str(message.author.id)
-                        })
-                        history.append({"role": "model", "content": reply})
-                        collection.update_one({"_id": ctx_id}, {"$set": {"history": history}}, upsert=True)
-                        await message.reply(reply)
-                        return 
-                except Exception:
-                    continue 
+            try:
+                res = await asyncio.get_event_loop().run_in_executor(None, lambda: client.models.generate_content(
+                    model='gemini-3.1-flash-lite-preview', 
+                    contents=payload, 
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instr,
+                        safety_settings=[
+                            types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_NONE'),
+                            types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_NONE')
+                        ]
+                    )
+                ))
+                
+                if res.text:
+                    reply = res.text.strip()
+                    history.append({
+                        "role": "user", 
+                        "content": message.content,
+                        "author_name": message.author.display_name,
+                        "author_id": str(message.author.id)
+                    })
+                    history.append({"role": "model", "content": reply})
+                    collection.update_one({"_id": ctx_id}, {"$set": {"history": history}}, upsert=True)
+                    await message.reply(reply)
+                    return 
+            except Exception:
+                continue 
 
         await message.reply("🚨 ALL KEYS FAILED.")
 
 # --- 5. STARTUP ---
 if __name__ == "__main__":
-    Thread(target=run_ping_server).start()
+    # Start Flask in background thread
+    Thread(target=run_ping_server, daemon=True).start()
+    
+    # Run Discord Bot in main thread
     bot = BinodOP(intents=discord.Intents.all())
     bot.run(TOKEN)
